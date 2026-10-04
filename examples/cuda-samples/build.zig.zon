@@ -1,0 +1,13 @@
+.{
+    .name = .cuda_samples,
+    .version = "0.0.0",
+    .dependencies = .{
+        .upstream = .{
+            .url = "git+https://github.com/NVIDIA/cuda-samples?ref=v13.4#5443602d89ed99aede2e4b7bf329daddeadb320e",
+            .hash = "N-V-__8AAASN4gwLMthgQEv7oeBy5qsKvN-oxMOg82tdrAmP",
+        },
+    },
+    .fingerprint = 0x3080dea83a086de9,
+    .minimum_zig_version = "0.18.0-dev",
+    .paths = .{""},
+}

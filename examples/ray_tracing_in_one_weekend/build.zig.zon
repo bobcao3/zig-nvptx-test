@@ -1,0 +1,7 @@
+.{
+    .name = .ray_tracing_in_one_weekend,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.18.0-dev.36+2a2f234ab",
+    .paths = .{""},
+    .fingerprint = 0x842ab1deaae6b885,
+}

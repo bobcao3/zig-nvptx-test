@@ -1,0 +1,15 @@
+// ptxas -arch=sm_90 recursive_call.ptx -o /dev/null   (crashes)
+.version 7.8
+.target sm_90
+.address_size 64
+.func foo();
+.visible .entry k(.param .b32 x)
+{
+	.reg .pred %p;
+	setp.ne.u32 %p, 0, 0;
+	@!%p bra $L__done;
+	call foo, ();
+$L__done:
+	ret;
+}
+.func foo() { call foo, (); ret; }

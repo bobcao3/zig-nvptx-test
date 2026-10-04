@@ -1,0 +1,15 @@
+.upstream/
+.zig-cache/
+zig-out/
+# Files that the samples write into the working directory
+*.bmp
+*.dds
+*.dat
+*.flo
+*.bin
+*.raw
+*.pgm
+*.nv12
+*.png
+*.ppm
+/output/
