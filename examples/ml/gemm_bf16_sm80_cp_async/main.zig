@@ -3,7 +3,8 @@ const cuda = @import("cuda");
 const TerminalTableRenderer = @import("TerminalTableRenderer");
 const cell = TerminalTableRenderer.cell;
 const Blas = @import("Blas.zig");
-const Kernel = @import("gemm_kernel.zig").Kernel;
+const gemm = @import("gemm_kernel.zig");
+const kernel_candidates = [_]Candidate{ .kernel, .pipelined };
 
 const Shape = struct { m: u32, n: u32, k: u32 };
 const Options = struct {
@@ -19,32 +20,42 @@ const Options = struct {
 /// The implementations that the benchmark times: the kernel and, with `--cublas`, cuBLAS.
 const Candidate = enum {
     kernel,
+    pipelined,
     cublas,
 
     fn name(candidate: Candidate) []const u8 {
         return switch (candidate) {
-            .kernel => Kernel.name,
+            .kernel => gemm.Kernel.name,
+            .pipelined => gemm.PipelinedKernel.name,
             .cublas => "cublasGemmEx",
         };
     }
 };
 
-const name_column = std.fmt.comptimePrint("{{s:<{d}}}", .{@max(Kernel.name.len, "Candidate".len)});
+const name_column = std.fmt.comptimePrint("{{s:<{d}}}", .{@max(gemm.Kernel.name.len, gemm.PipelinedKernel.name.len, "Candidate".len)});
 
 const Runner = struct {
-    function: cuda.Function,
+    functions: [gemm.kernels.len]cuda.Function,
     blas: Blas,
     stream: cuda.Stream,
 
     fn launch(runner: *const Runner, candidate: Candidate, problem: *const Problem) !void {
         const shape = problem.shape;
         switch (candidate) {
-            .kernel => try runner.function.launch(.{
-                .grid = .{ .x = shape.n / Kernel.block_n, .y = shape.m / Kernel.block_m },
-                .block = .{ .x = Kernel.threads },
-                .shared_memory_bytes = Kernel.dynamic_shared_bytes,
-                .stream = runner.stream,
-            }, .{ problem.a, problem.b, problem.c, shape.m, shape.n, shape.k }),
+            .kernel, .pipelined => {
+                inline for (gemm.kernels, runner.functions, kernel_candidates) |Kernel, function, kernel_candidate| {
+                    if (candidate == kernel_candidate) {
+                        try function.launch(.{
+                            .grid = .{ .x = shape.n / Kernel.block_n, .y = shape.m / Kernel.block_m },
+                            .block = .{ .x = Kernel.threads },
+                            .shared_memory_bytes = Kernel.dynamic_shared_bytes,
+                            .stream = runner.stream,
+                        }, .{ problem.a, problem.b, problem.c, shape.m, shape.n, shape.k });
+                        return;
+                    }
+                }
+                unreachable;
+            },
             .cublas => try runner.blas.gemmBf16(
                 problem.a,
                 problem.b,
@@ -134,10 +145,7 @@ pub fn main(init: std.process.Init) !void {
     defer stream.destroy();
     var reference_blas = try Blas.open(stream, .pedantic);
     defer reference_blas.close();
-    const function = try module.function(Kernel.name);
-    try function.setMaxDynamicSharedMemory(Kernel.dynamic_shared_bytes);
-    const static_shared: u32 = @intCast(try function.attribute(.shared_size_bytes));
-    const shared = Kernel.dynamic_shared_bytes;
+    var functions: [gemm.kernels.len]cuda.Function = undefined;
     try renderer.row(.heading, name_column ++ "  {s:>9}  {s:>12}  {s:>14}", .{
         "Kernel",
         "Registers",
@@ -145,14 +153,20 @@ pub fn main(init: std.process.Init) !void {
         "Work groups/SM",
     });
     const resource_format = cell.cyan ++ name_column ++ cell.normal ++ "  {d:>9}  {d:>12}  {d:>14}";
-    try renderer.row(.body, resource_format, .{
-        Kernel.name,
-        @as(u32, @intCast(try function.attribute(.num_regs))),
-        static_shared + shared,
-        try function.maxActiveBlocksPerMultiprocessor(Kernel.threads, shared),
-    });
+    inline for (gemm.kernels, &functions) |Kernel, *function| {
+        function.* = try module.function(Kernel.name);
+        try function.setMaxDynamicSharedMemory(Kernel.dynamic_shared_bytes);
+        const static_shared: u32 = @intCast(try function.attribute(.shared_size_bytes));
+        const shared = Kernel.dynamic_shared_bytes;
+        try renderer.row(.body, resource_format, .{
+            Kernel.name,
+            @as(u32, @intCast(try function.attribute(.num_regs))),
+            static_shared + shared,
+            try function.maxActiveBlocksPerMultiprocessor(Kernel.threads, shared),
+        });
+    }
     var runner: Runner = .{
-        .function = function,
+        .functions = functions,
         .blas = try Blas.open(stream, .default),
         .stream = stream,
     };
@@ -161,28 +175,30 @@ pub fn main(init: std.process.Init) !void {
     const shape: Shape = .{ .m = size, .n = size, .k = size };
     var problem = try Problem.init(allocator, reference_blas, shape, options.seed);
     defer problem.deinit(allocator);
-    const with_cublas: []const Candidate = &.{ .kernel, .cublas };
-    const candidates = if (options.cublas != 0) with_cublas else with_cublas[0..1];
+    const with_cublas: []const Candidate = &.{ .kernel, .pipelined, .cublas };
+    const candidates = if (options.cublas != 0) with_cublas else &kernel_candidates;
 
     try renderer.row(.title, "\nChecks against the f32 cuBLAS result", .{});
     try renderer.row(.heading, name_column ++ "  {s:>5}  {s:>5}  {s:>5}  {s:>9}  {s:>9}", .{
         "Candidate", "M", "N", "K", "Max error", "RMS error",
     });
     for (candidates) |candidate| try runner.validate(&renderer, candidate, &problem);
-    for ([_]Shape{
-        .{ .m = Kernel.block_m, .n = Kernel.block_n * 2, .k = Kernel.block_k },
-        .{ .m = Kernel.block_m * 2, .n = Kernel.block_n, .k = Kernel.block_k * 2 },
-        .{ .m = Kernel.block_m, .n = Kernel.block_n * 2, .k = Kernel.block_k * 3 },
-        .{ .m = Kernel.block_m * 2, .n = Kernel.block_n, .k = Kernel.block_k * 5 },
-        .{
-            .m = Kernel.block_m * (Kernel.group_m + 1),
-            .n = Kernel.block_n * 3,
-            .k = Kernel.block_k * 9,
-        },
-    }) |small_shape| {
-        var small = try Problem.init(allocator, reference_blas, small_shape, options.seed);
-        defer small.deinit(allocator);
-        try runner.validate(&renderer, .kernel, &small);
+    inline for (gemm.kernels, kernel_candidates) |Kernel, candidate| {
+        for ([_]Shape{
+            .{ .m = Kernel.block_m, .n = Kernel.block_n * 2, .k = Kernel.block_k },
+            .{ .m = Kernel.block_m * 2, .n = Kernel.block_n, .k = Kernel.block_k * 2 },
+            .{ .m = Kernel.block_m, .n = Kernel.block_n * 2, .k = Kernel.block_k * 3 },
+            .{ .m = Kernel.block_m * 2, .n = Kernel.block_n, .k = Kernel.block_k * 5 },
+            .{
+                .m = Kernel.block_m * (Kernel.group_m + 1),
+                .n = Kernel.block_n * 3,
+                .k = Kernel.block_k * 9,
+            },
+        }) |small_shape| {
+            var small = try Problem.init(allocator, reference_blas, small_shape, options.seed);
+            defer small.deinit(allocator);
+            try runner.validate(&renderer, candidate, &small);
+        }
     }
 
     try renderer.row(.title, "\n{d}x{d}x{d}: {d} warmup launches before each round, " ++
@@ -218,7 +234,7 @@ pub fn main(init: std.process.Init) !void {
         }
         if (!renderer.terminal and round + 1 < options.rounds) continue;
         const measured = (round + 1) * options.repeat;
-        var times: [2]f64 = undefined;
+        var times: [kernel_candidates.len + 1]f64 = undefined;
         for (times[0..candidates.len], 0..) |*time, slot| {
             time.* = median(timings[slot * samples ..][0..measured], scratch);
         }
@@ -305,8 +321,10 @@ fn parseOptions(init: std.process.Init) !Options {
         options.rounds == 0 or options.rounds > 16)
         return error.InvalidBenchmarkCount;
     if (options.size == 0 or options.size > 8192) return error.InvalidBenchmarkSize;
-    if (options.size % Kernel.block_m != 0 or options.size % Kernel.block_n != 0 or
-        options.size % Kernel.block_k != 0) return error.InvalidBenchmarkSize;
+    inline for (gemm.kernels) |Kernel| {
+        if (options.size % Kernel.block_m != 0 or options.size % Kernel.block_n != 0 or
+            options.size % Kernel.block_k != 0) return error.InvalidBenchmarkSize;
+    }
     return options;
 }
 

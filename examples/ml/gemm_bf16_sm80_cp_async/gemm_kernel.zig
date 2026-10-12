@@ -26,8 +26,23 @@ pub const Kernel = Gemm(.{
     .min_work_groups_per_sm = 1,
 });
 
+pub const PipelinedKernel = Gemm(.{
+    .block_m = 128,
+    .block_n = 256,
+    .block_k = 32,
+    .stages = 3,
+    .warp_m = 64,
+    .warp_n = 64,
+    .group_m = 6,
+    .min_work_groups_per_sm = 1,
+});
+
+pub const kernels = .{ Kernel, PipelinedKernel };
+
 comptime {
-    if (builtin.cpu.arch.isNvptx()) @export(&Kernel.kernel, .{ .name = Kernel.name });
+    if (builtin.cpu.arch.isNvptx()) {
+        for (kernels) |K| @export(&K.kernel, .{ .name = K.name });
+    }
 }
 
 /// A chunk holds eight bf16 elements, the size of one `cp.async` copy and of one `ldmatrix` row.
