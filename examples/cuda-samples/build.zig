@@ -1,8 +1,9 @@
 //! Builds every sample folder `<category>/<sample>/` that contains `<sample>.zig`. The host
 //! program `<sample>.zig` embeds the PTX of each `*_kernel.zig` file of the folder as
-//! `@embedFile("<file stem>.ptx")`. The install step mirrors the sample folders, as the build tree
-//! of the CMake build of cuda-samples does: `bin/<category>/<sample>/` holds the executable and
-//! the PTX of its kernels.
+//! `@embedFile("<file stem>.ptx")`, and each file of the `data` folder of the upstream sample as
+//! `@embedFile("<file name>")`. The install step mirrors the sample folders, as the build tree of
+//! the CMake build of cuda-samples does: `bin/<category>/<sample>/` holds the executable and the
+//! PTX of its kernels.
 
 const std = @import("std");
 
@@ -61,6 +62,7 @@ pub fn build(b: *std.Build) void {
         .target = device_target,
         .optimize = kernel_optimize,
     });
+    const upstream = b.lazyDependency("upstream", .{});
     const run_all = b.step("run", "Run every sample");
     var previous_run: ?*std.Build.Step = null;
     var samples: std.ArrayList(Sample) = .empty;
@@ -79,6 +81,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{.{ .name = "cuda", .module = cuda }},
             });
+            if (upstream) |dependency| addUpstreamData(b, dependency, host, dir);
             var ptx_files: std.ArrayList(std.Build.LazyPath) = .empty;
             for (files) |file| {
                 if (!std.mem.endsWith(u8, file, "_kernel.zig")) continue;
@@ -123,13 +126,13 @@ pub fn build(b: *std.Build) void {
     }
 
     const compare_step = b.step("compare-nvcc", "Compare the kernels with nvcc's build of the upstream samples and write zig-out/nvcc-compare.md");
-    if (b.lazyDependency("upstream", .{})) |upstream| {
+    if (upstream) |dependency| {
         const nvcc: std.Build.LazyPath = if (cuda_bin) |dir|
             .{ .cwd_relative = b.pathJoin(&.{ dir, b.fmt("nvcc{s}", .{b.graph.host.result.exeFileExt()}) }) }
         else
             b.findProgramLazy(.{ .names = &.{"nvcc"} });
         addCompareNvcc(b, compare_step, .{
-            .upstream = upstream,
+            .upstream = dependency,
             .nvcc = nvcc,
             .arch = device_target.result.cpu.model.name,
             .kernel_optimize = kernel_optimize,
@@ -263,6 +266,14 @@ fn upstreamSources(b: *std.Build, upstream: *std.Build.Dependency, sub_path: []c
     }
     std.mem.sortUnstable([]const u8, sources.items, {}, lessThan);
     return sources.items;
+}
+
+fn addUpstreamData(b: *std.Build, upstream: *std.Build.Dependency, host: *std.Build.Module, sample_dir: []const u8) void {
+    const data_dir = b.pathJoin(&.{ "cpp", sample_dir, "data" });
+    if (!upstreamHas(b, upstream, data_dir)) return;
+    for (listDir(upstream.builder, data_dir, .file)) |file| {
+        host.addAnonymousImport(file, .{ .root_source_file = upstream.path(b.pathJoin(&.{ data_dir, file })) });
+    }
 }
 
 fn upstreamHas(b: *std.Build, upstream: *std.Build.Dependency, sub_path: []const u8) bool {

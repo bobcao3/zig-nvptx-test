@@ -5,8 +5,9 @@ are in `.upstream/cpp/<category>/<sample>/`, which is not under version control:
 
     git clone --depth 1 https://github.com/NVIDIA/cuda-samples .upstream
 
-`zig build --fetch` also fetches the upstream commit that `build.zig.zon` pins into `zig-pkg/`,
-which the `compare-nvcc` step reads.
+`zig build --fetch` also fetches the upstream commit that `build.zig.zon` pins into `zig-pkg/`. The
+build embeds the input files of the samples from that copy, and the `compare-nvcc` step compiles
+its `.cu` files.
 
 ## Files of a sample
 
@@ -18,7 +19,10 @@ is needed. In that folder:
 | `<sample>.zig` | The host program, with `pub fn main`. It imports the module `cuda`. |
 | `<name>_kernel.zig` | One PTX module per file. It uses `std.nvptx` for PTX instructions. The host gets the PTX text as `@embedFile("<name>_kernel.ptx")`. |
 | other `.zig` files | Code that the host program or a kernel file imports by relative path. |
-| data files | Input files of the original sample, copied from `.upstream` and read with `@embedFile`. |
+
+The host program reads each input file of the original sample with `@embedFile("<file name>")`.
+`build.zig` provides every file of the `data` folder of the upstream sample under its own name, so
+the input files stay out of this repository.
 
 Keep the upstream names: the sample folder, the file stems (`matrixMul_kernel.cu` becomes
 `matrixMul_kernel.zig`; a kernel in `<sample>.cu` goes to `<sample>_kernel.zig`), the kernel and
