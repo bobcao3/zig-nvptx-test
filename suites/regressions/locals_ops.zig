@@ -101,10 +101,83 @@ pub fn pointer_select(out: anytype) void {
     }
 }
 
+/// Swaps the bytes of two values in a loop, as `std.mem.swap` does at run time.
+inline fn swapBytes(comptime T: type, a: *T, b: *T) void {
+    const a_bytes: []align(@alignOf(T)) u8 = @ptrCast(a);
+    const b_bytes: []align(@alignOf(T)) u8 = @ptrCast(b);
+    for (a_bytes, b_bytes) |*a_byte, *b_byte| {
+        const byte = a_byte.*;
+        a_byte.* = b_byte.*;
+        b_byte.* = byte;
+    }
+}
+
+pub fn swapped_halves(out: anytype) void {
+    for (samples, 0..) |sample, n| {
+        const x = operand(out, sample);
+        var low: u16 = @truncate(x);
+        var high: u16 = @truncate(x >> 16);
+        if (low < high) swapBytes(u16, &low, &high);
+        out[n] = @as(u32, high) << 16 | low;
+    }
+}
+
+pub fn swapped_words(out: anytype) void {
+    for (samples, 0..) |sample, n| {
+        const x = operand(out, sample);
+        var a: u64 = sample ^ x;
+        var b: u64 = @as(u64, x) << 32 | ~x;
+        if (x & 1 != 0) swapBytes(u64, &a, &b);
+        var c: f32 = @bitCast(x);
+        var d: f32 = @bitCast(x *% 2654435761);
+        if (x & 2 != 0) swapBytes(f32, &c, &d);
+        out[n] = @as(u32, @truncate(a ^ b >> 3)) +% @as(u32, @bitCast(c)) *% 3 +% @as(u32, @bitCast(d));
+    }
+}
+
+pub fn indexed_bytes(out: anytype) void {
+    for (samples, 0..) |sample, n| {
+        const x = operand(out, sample);
+        var word: u32 = x;
+        const bytes: *[4]u8 = @ptrCast(&word);
+        bytes[x % 4] = @truncate(x >> 8);
+        bytes[(x >> 2) % 4] +%= 1;
+        const signed: *const [4]i8 = @ptrCast(&word);
+        out[n] = word +% @as(u32, @bitCast(@as(i32, signed[(x >> 4) % 4])));
+    }
+}
+
+pub fn indexed_triples(out: anytype) void {
+    for (samples, 0..) |sample, n| {
+        const x = operand(out, sample);
+        var triple: [3]u8 = .{ @truncate(x), @truncate(x >> 8), @truncate(x >> 16) };
+        var other: [3]u8 = .{ @truncate(x >> 24), @truncate(x >> 3), @truncate(x >> 11) };
+        swapBytes([3]u8, &triple, &other);
+        triple[x % 3] ^= other[(x >> 5) % 3];
+        out[n] = @as(u32, triple[0]) | @as(u32, triple[1]) << 8 | @as(u32, triple[2]) << 16 | @as(u32, other[x % 3]) << 24;
+    }
+}
+
+pub fn indexed_halves(out: anytype) void {
+    for (samples, 0..) |sample, n| {
+        const x = operand(out, sample);
+        var halves: [3]u16 = .{ @truncate(x), @truncate(x >> 16), @truncate(sample >> 32) };
+        halves[x % 3] = @truncate(x *% 2654435761);
+        var pair: [2]f32 = .{ @bitCast(x), @bitCast(~x) };
+        pair[(x >> 1) % 2] = @bitCast(x >> 3);
+        out[n] = @as(u32, halves[(x >> 2) % 3]) +% @as(u32, @bitCast(pair[x % 2])) *% 7 +% halves[0];
+    }
+}
+
 pub const names = [_][]const u8{
     "constant_table",
     "element_pointers",
     "pointer_receiver",
     "array_fields",
     "pointer_select",
+    "swapped_halves",
+    "swapped_words",
+    "indexed_bytes",
+    "indexed_triples",
+    "indexed_halves",
 };

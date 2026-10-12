@@ -19,3 +19,23 @@ export fn array_fields(out: [*]addrspace(.global) u32) callconv(.kernel) void {
 export fn pointer_select(out: [*]addrspace(.global) u32) callconv(.kernel) void {
     ops.pointer_select(out);
 }
+
+export fn swapped_halves(out: [*]addrspace(.global) u32) callconv(.kernel) void {
+    ops.swapped_halves(out);
+}
+
+export fn swapped_words(out: [*]addrspace(.global) u32) callconv(.kernel) void {
+    ops.swapped_words(out);
+}
+
+export fn indexed_bytes(out: [*]addrspace(.global) u32) callconv(.kernel) void {
+    ops.indexed_bytes(out);
+}
+
+export fn indexed_triples(out: [*]addrspace(.global) u32) callconv(.kernel) void {
+    ops.indexed_triples(out);
+}
+
+export fn indexed_halves(out: [*]addrspace(.global) u32) callconv(.kernel) void {
+    ops.indexed_halves(out);
+}
