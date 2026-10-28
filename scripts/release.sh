@@ -108,8 +108,18 @@ publish_release() {
         --data "$payload" https://forge.bc3.moe/api/v1/repos/bob/zig-nvptx-test/tags)
     test "$(jq -r '.commit.sha' <<< "$response")" = "$GITHUB_SHA"
 
+    local mirrored_revision=''
+    for ((attempt = 0; attempt < 60; attempt++)); do
+        mirrored_revision=$(git ls-remote "https://github.com/$GH_REPO.git" "refs/tags/$tag" | cut -f1) || true
+        if [[ "$mirrored_revision" == "$GITHUB_SHA" ]]; then
+            break
+        fi
+        sleep 2
+    done
+    test "$mirrored_revision" = "$GITHUB_SHA"
+
     gh release create "$tag" "packages/$linux" "packages/$macos" packages/SHA256SUMS \
-        --target "$GITHUB_SHA" --prerelease --title "Zig NVPTX build $GITHUB_RUN_ID" \
+        --verify-tag --prerelease --title "Zig NVPTX build $GITHUB_RUN_ID" \
         --notes "Compiler source: https://forge.bc3.moe/bob/zig-nvptx/commit/$SOURCE_REVISION
 Bootstrap: Zig $bootstrap_version with LLVM, Clang and LLD.
 Each archive contains the compiler and its complete lib directory."
