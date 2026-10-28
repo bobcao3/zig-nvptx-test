@@ -99,21 +99,14 @@ publish_release() {
     test -s "packages/$macos"
     (cd packages && sha256sum "$linux" "$macos" > SHA256SUMS)
 
-    test -n "$FORGEJO_SSH_KEY"
-    test -n "$FORGEJO_HOST_KEY"
-    mkdir -p "$RUNNER_TEMP/ssh"
-    chmod 700 "$RUNNER_TEMP/ssh"
-    printf '%s\n' "$FORGEJO_SSH_KEY" > "$RUNNER_TEMP/ssh/key"
-    printf '%s\n' "$FORGEJO_HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
-    chmod 600 "$RUNNER_TEMP/ssh/key"
-    trap 'rm -f "$RUNNER_TEMP/ssh/key"' EXIT
-    export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/ssh/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts"
+    test -n "$FORGEJO_RELEASE_TOKEN"
     local tag="nvptx-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-    git init release-tag
-    git -C release-tag fetch --depth=1 https://forge.bc3.moe/bob/zig-nvptx-test.git "$GITHUB_SHA"
-    test "$(git -C release-tag rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
-    git -C release-tag tag "$tag" FETCH_HEAD
-    git -C release-tag push ssh://git@ssh.forge.bc3.moe/bob/zig-nvptx-test.git "refs/tags/$tag"
+    local payload response
+    payload=$(jq -n --arg tag "$tag" --arg target "$GITHUB_SHA" '{tag_name: $tag, target: $target}')
+    response=$(curl --fail-with-body --silent --show-error \
+        -H "Authorization: token $FORGEJO_RELEASE_TOKEN" -H 'Content-Type: application/json' \
+        --data "$payload" https://forge.bc3.moe/api/v1/repos/bob/zig-nvptx-test/tags)
+    test "$(jq -r '.commit.sha' <<< "$response")" = "$GITHUB_SHA"
 
     gh release create "$tag" "packages/$linux" "packages/$macos" packages/SHA256SUMS \
         --target "$GITHUB_SHA" --prerelease --title "Zig NVPTX build $GITHUB_RUN_ID" \

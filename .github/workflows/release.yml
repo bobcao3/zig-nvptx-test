@@ -101,5 +101,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_REVISION: ${{ needs.source.outputs.revision }}
-          FORGEJO_SSH_KEY: ${{ secrets.FORGEJO_RELEASE_SSH_KEY }}
-          FORGEJO_HOST_KEY: ${{ vars.FORGEJO_SSH_HOST_KEY }}
+          FORGEJO_RELEASE_TOKEN: ${{ secrets.FORGEJO_RELEASE_TOKEN }}
