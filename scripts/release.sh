@@ -100,9 +100,10 @@ publish_release() {
     (cd packages && sha256sum "$linux" "$macos" > SHA256SUMS)
 
     test -n "$FORGEJO_RELEASE_TOKEN"
-    local timestamp tag
+    local timestamp tag source_short
     timestamp=$(date -u '+%Y-%m-%d-%H%M%SZ')
-    tag="nvptx-$timestamp"
+    source_short=${SOURCE_REVISION:0:9}
+    tag="nvptx-$source_short-$timestamp"
     local payload response
     payload=$(jq -n --arg tag "$tag" --arg target "$GITHUB_SHA" '{tag_name: $tag, target: $target}')
     response=$(curl --fail-with-body --silent --show-error \
@@ -121,7 +122,7 @@ publish_release() {
     test "$mirrored_revision" = "$GITHUB_SHA"
 
     gh release create "$tag" "packages/$linux" "packages/$macos" packages/SHA256SUMS \
-        --verify-tag --prerelease --title "Zig NVPTX $timestamp" \
+        --verify-tag --prerelease --title "Zig NVPTX $source_short $timestamp" \
         --notes "Compiler source: https://forge.bc3.moe/bob/zig-nvptx/commit/$SOURCE_REVISION
 Bootstrap: Zig $bootstrap_version with LLVM, Clang and LLD."
 }
