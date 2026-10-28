@@ -21,27 +21,12 @@ jobs:
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
 
-  build:
+  linux:
     needs: source
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-linux-musl
-            cpu: x86_64_v3
-            sha256: 3d59a8b9ac5ed3c1a046e550f35b5fb89cb5cd5ebf177cdf1ca00ad8150994e1
-          - runner: macos-14
-            target: aarch64-macos-none
-            cpu: apple_m1
-            sha256: 5daddeaad6e135ae4bd09d6c2b4c5a30873b58d10671c13fb8ac1af246df05e6
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       SOURCE_REVISION: ${{ needs.source.outputs.revision }}
-      TARGET: ${{ matrix.target }}
-      CPU: ${{ matrix.cpu }}
-      TOOLCHAIN_SHA256: ${{ matrix.sha256 }}
       BOOTSTRAP_VERSION: 0.18.0-dev.92+1e1964473
     steps:
       - name: Download compiler source and pinned bootstrap toolchain
@@ -53,38 +38,37 @@ jobs:
           git -C source fetch --depth=1 origin "$SOURCE_REVISION"
           git -C source checkout --detach FETCH_HEAD
           test "$(git -C source rev-parse HEAD)" = "$SOURCE_REVISION"
-
-          name="zig+llvm+lld+clang-$TARGET-$BOOTSTRAP_VERSION"
+          name="zig+llvm+lld+clang-x86_64-linux-musl-$BOOTSTRAP_VERSION"
           curl --fail --location --retry 3 --output "$RUNNER_TEMP/$name.tar.xz" \
             "https://ziglang.org/deps/$name.tar.xz"
-          echo "$TOOLCHAIN_SHA256  $RUNNER_TEMP/$name.tar.xz" | shasum -a 256 -c -
+          echo "3d59a8b9ac5ed3c1a046e550f35b5fb89cb5cd5ebf177cdf1ca00ad8150994e1  $RUNNER_TEMP/$name.tar.xz" | shasum -a 256 -c -
           tar -xf "$RUNNER_TEMP/$name.tar.xz" -C "$RUNNER_TEMP"
           rm "$RUNNER_TEMP/$name.tar.xz"
 
-      - name: Build and package the compiler and library
+      - name: Build and package the Linux compiler and library
         shell: bash
         run: |
           set -euo pipefail
           cd source
-          toolchain="$RUNNER_TEMP/zig+llvm+lld+clang-$TARGET-$BOOTSTRAP_VERSION"
-          dist="zig-nvptx-$TARGET-$CPU"
+          toolchain="$RUNNER_TEMP/zig+llvm+lld+clang-x86_64-linux-musl-$BOOTSTRAP_VERSION"
+          dist=zig-nvptx-x86_64-linux-musl-x86_64_v3
           version=$(python3 -c 'import re,sys; s=open("build.zig").read(); m=re.search(r"const zig_version: std.SemanticVersion = .\{ .major = (\d+), .minor = (\d+), .patch = (\d+) \};", s); assert m; print(".".join(m.groups()) + "-dev.0+" + sys.argv[1][:9])' "$SOURCE_REVISION")
           export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zig-global-cache"
           export ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/zig-local-cache"
           "$toolchain/bin/zig" build --zig-lib="$PWD/lib" \
-            --prefix "$RUNNER_TEMP/$dist" --search-prefix "$toolchain" \
-            -Dtarget="$TARGET" -Dcpu="$CPU" -Doptimize=ReleaseFast \
+            --prefix "$RUNNER_TEMP/$dist" --search-prefix "$toolchain" --maxrss 24000000000 \
+            -Dtarget=x86_64-linux-musl -Dcpu=x86_64_v3 -Doptimize=ReleaseFast \
             -Dstatic-llvm -Duse-zig-libcxx -Dflat -Dno-langref -Dstrip \
             -Dversion-string="$version" -j2
           cp LICENSE README.md "$RUNNER_TEMP/$dist/"
           test -f "$RUNNER_TEMP/$dist/lib/std/std.zig"
           tar -C "$RUNNER_TEMP" -cJf "$GITHUB_WORKSPACE/$dist.tar.xz" "$dist"
 
-      - name: Smoke test the relocated package
+      - name: Smoke test the relocated Linux package
         shell: bash
         run: |
           set -euo pipefail
-          dist="zig-nvptx-$TARGET-$CPU"
+          dist=zig-nvptx-x86_64-linux-musl-x86_64_v3
           mkdir -p "$RUNNER_TEMP/smoke"
           tar -xf "$GITHUB_WORKSPACE/$dist.tar.xz" -C "$RUNNER_TEMP/smoke"
           zig="$RUNNER_TEMP/smoke/$dist/zig"
@@ -101,16 +85,105 @@ jobs:
             -mcpu=sm_80 -femit-bin="$RUNNER_TEMP/smoke/kernel.ptx"
           grep -q '\.entry kernel' "$RUNNER_TEMP/smoke/kernel.ptx"
 
-      - name: Upload package
+      - name: Upload Linux package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: zig-${{ matrix.target }}-${{ matrix.cpu }}
-          path: zig-nvptx-${{ matrix.target }}-${{ matrix.cpu }}.tar.xz
+          name: zig-linux
+          path: zig-nvptx-x86_64-linux-musl-x86_64_v3.tar.xz
           if-no-files-found: error
           compression-level: 0
 
+  macos-build:
+    needs: [source, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      SOURCE_REVISION: ${{ needs.source.outputs.revision }}
+      BOOTSTRAP_VERSION: 0.18.0-dev.92+1e1964473
+    steps:
+      - name: Download Linux compiler
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: zig-linux
+          path: packages
+
+      - name: Download compiler source and macOS libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init source
+          git -C source remote add origin https://forge.bc3.moe/bob/zig-nvptx.git
+          git -C source fetch --depth=1 origin "$SOURCE_REVISION"
+          git -C source checkout --detach FETCH_HEAD
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_REVISION"
+          name="zig+llvm+lld+clang-aarch64-macos-none-$BOOTSTRAP_VERSION"
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/$name.tar.xz" \
+            "https://ziglang.org/deps/$name.tar.xz"
+          echo "5daddeaad6e135ae4bd09d6c2b4c5a30873b58d10671c13fb8ac1af246df05e6  $RUNNER_TEMP/$name.tar.xz" | shasum -a 256 -c -
+          tar -xf "$RUNNER_TEMP/$name.tar.xz" -C "$RUNNER_TEMP"
+          rm "$RUNNER_TEMP/$name.tar.xz"
+          tar -xf packages/zig-nvptx-x86_64-linux-musl-x86_64_v3.tar.xz -C "$RUNNER_TEMP"
+
+      - name: Cross-compile and package the macOS compiler and library
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          toolchain="$RUNNER_TEMP/zig+llvm+lld+clang-aarch64-macos-none-$BOOTSTRAP_VERSION"
+          zig="$RUNNER_TEMP/zig-nvptx-x86_64-linux-musl-x86_64_v3/zig"
+          dist=zig-nvptx-aarch64-macos-none-apple_m1
+          export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zig-global-cache"
+          export ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/zig-local-cache"
+          "$zig" build --zig-lib="$PWD/lib" \
+            --prefix "$RUNNER_TEMP/$dist" --search-prefix "$toolchain" --maxrss 24000000000 \
+            -Dtarget=aarch64-macos-none -Dcpu=apple_m1 -Doptimize=ReleaseFast \
+            -Dstatic-llvm -Duse-zig-libcxx -Dflat -Dno-langref -Dstrip \
+            -Dversion-string="$("$zig" version)" -j2
+          cp LICENSE README.md "$RUNNER_TEMP/$dist/"
+          test -f "$RUNNER_TEMP/$dist/lib/std/std.zig"
+          tar -C "$RUNNER_TEMP" -cJf "$GITHUB_WORKSPACE/$dist.tar.xz" "$dist"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zig-macos
+          path: zig-nvptx-aarch64-macos-none-apple_m1.tar.xz
+          if-no-files-found: error
+          compression-level: 0
+
+  macos-test:
+    needs: macos-build
+    runs-on: macos-14
+    steps:
+      - name: Download macOS package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: zig-macos
+          path: packages
+
+      - name: Smoke test the relocated macOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist=zig-nvptx-aarch64-macos-none-apple_m1
+          mkdir -p "$RUNNER_TEMP/smoke"
+          tar -xf "packages/$dist.tar.xz" -C "$RUNNER_TEMP/smoke"
+          zig="$RUNNER_TEMP/smoke/$dist/zig"
+          unset ZIG_LIB_DIR
+          "$zig" version
+          printf '%s\n' 'const std = @import("std");' \
+            'pub fn main() void { std.debug.assert(std.mem.eql(u8, "zig", "zig")); }' \
+            > "$RUNNER_TEMP/smoke/host.zig"
+          "$zig" build-exe "$RUNNER_TEMP/smoke/host.zig" -fllvm -femit-bin="$RUNNER_TEMP/smoke/host"
+          "$RUNNER_TEMP/smoke/host"
+          printf '%s\n' 'export fn kernel(out: *u32) callconv(.kernel) void { out.* = 42; }' \
+            > "$RUNNER_TEMP/smoke/kernel.zig"
+          "$zig" build-exe "$RUNNER_TEMP/smoke/kernel.zig" -target nvptx64-cuda \
+            -mcpu=sm_80 -femit-bin="$RUNNER_TEMP/smoke/kernel.ptx"
+          grep -q '\.entry kernel' "$RUNNER_TEMP/smoke/kernel.ptx"
+
   release:
-    needs: [source, build]
+    needs: [source, linux, macos-build, macos-test]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
