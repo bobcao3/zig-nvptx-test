@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-bootstrap_version=0.18.0-dev.92+1e1964473
-linux_dist=zig-nvptx-x86_64-linux-musl-x86_64_v3
-macos_dist=zig-nvptx-aarch64-macos-none-apple_m1
+bootstrap_version='0.18.0-dev.92+1e1964473'
+linux_dist='zig-nvptx-x86_64-linux-musl-x86_64_v3'
+macos_dist='zig-nvptx-aarch64-macos-none-apple_m1'
 
 checkout_compiler() {
     git init compiler-source
@@ -30,11 +30,15 @@ package_compiler() {
     tar -C "$RUNNER_TEMP" -cJf "$GITHUB_WORKSPACE/$dist.tar.xz" "$dist"
 }
 
+source_version() {
+    python3 -c 'import re,sys; s=open("build.zig").read(); m=re.search(r"const zig_version: std.SemanticVersion = .\{ .major = (\d+), .minor = (\d+), .patch = (\d+) \};", s); assert m; print(".".join(m.groups()) + "-dev.0+" + sys.argv[1][:9])' "$SOURCE_REVISION"
+}
+
 build_linux() {
     local toolchain="$RUNNER_TEMP/zig+llvm+lld+clang-x86_64-linux-musl-$bootstrap_version"
     local version
     cd compiler-source
-    version=$(python3 -c 'import re,sys; s=open("build.zig").read(); m=re.search(r"const zig_version: std.SemanticVersion = .\{ .major = (\d+), .minor = (\d+), .patch = (\d+) \};", s); assert m; print(".".join(m.groups()) + "-dev.0+" + sys.argv[1][:9])' "$SOURCE_REVISION")
+    version=$(source_version)
     export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zig-global-cache"
     export ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/zig-local-cache"
     "$toolchain/bin/zig" build --zig-lib="$PWD/lib" \
@@ -47,8 +51,18 @@ build_linux() {
 
 build_macos() {
     local toolchain="$RUNNER_TEMP/zig+llvm+lld+clang-aarch64-macos-none-$bootstrap_version"
-    local zig="$RUNNER_TEMP/$linux_dist/zig"
+    local linux_toolchain="$RUNNER_TEMP/zig+llvm+lld+clang-x86_64-linux-musl-$bootstrap_version"
+    local zig="$RUNNER_TEMP/host-compiler/bin/zig"
+    local version
     cd compiler-source
+    version=$(source_version)
+    export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/host-global-cache"
+    export ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/host-local-cache"
+    "$linux_toolchain/bin/zig" build --zig-lib="$PWD/lib" \
+        --prefix "$RUNNER_TEMP/host-compiler" --search-prefix "$linux_toolchain" --maxrss 24000000000 \
+        -Dtarget=x86_64-linux-musl -Dcpu=x86_64_v3 -Doptimize=ReleaseFast \
+        -Dstatic-llvm -Duse-zig-libcxx -Dno-lib -Dstrip -Dversion-string="$version" -j2
+    rm -rf "$RUNNER_TEMP/host-local-cache" "$RUNNER_TEMP/host-global-cache" "$linux_toolchain"
     export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zig-global-cache"
     export ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/zig-local-cache"
     "$zig" build --zig-lib="$PWD/lib" \
@@ -122,8 +136,8 @@ case "${1:-}" in
     linux-check) verify_package "$linux_dist" "$GITHUB_WORKSPACE/$linux_dist.tar.xz" ;;
     macos-download)
         checkout_compiler
+        download_toolchain x86_64-linux-musl 3d59a8b9ac5ed3c1a046e550f35b5fb89cb5cd5ebf177cdf1ca00ad8150994e1
         download_toolchain aarch64-macos-none 5daddeaad6e135ae4bd09d6c2b4c5a30873b58d10671c13fb8ac1af246df05e6
-        tar -xf "packages/$linux_dist.tar.xz" -C "$RUNNER_TEMP"
         ;;
     macos-build) build_macos ;;
     macos-check) verify_package "$macos_dist" "$GITHUB_WORKSPACE/packages/$macos_dist.tar.xz" ;;

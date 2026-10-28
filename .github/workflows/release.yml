@@ -44,7 +44,7 @@ jobs:
           compression-level: 0
 
   macos-build:
-    needs: [source, linux]
+    needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -53,12 +53,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Download Linux compiler
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: zig-linux
-          path: packages
-      - name: Download compiler source and macOS libraries
+      - name: Download compiler source and build toolchains
         run: scripts/release.sh macos-download
       - name: Cross-compile and package the macOS compiler and library
         run: scripts/release.sh macos-build
