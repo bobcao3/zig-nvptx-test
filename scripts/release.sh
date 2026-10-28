@@ -121,8 +121,7 @@ publish_release() {
     gh release create "$tag" "packages/$linux" "packages/$macos" packages/SHA256SUMS \
         --verify-tag --prerelease --title "Zig NVPTX build $GITHUB_RUN_ID" \
         --notes "Compiler source: https://forge.bc3.moe/bob/zig-nvptx/commit/$SOURCE_REVISION
-Bootstrap: Zig $bootstrap_version with LLVM, Clang and LLD.
-Each archive contains the compiler and its complete lib directory."
+Bootstrap: Zig $bootstrap_version with LLVM, Clang and LLD."
 }
 
 case "${1:-}" in
